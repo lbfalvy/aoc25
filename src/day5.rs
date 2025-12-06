@@ -27,10 +27,8 @@ pub fn task1() {
 pub fn task2() {
 	let (mut fresh, _) = parse();
 	fresh.sort_by_key(|ri| ri.start);
-	let ranges = (fresh.into_iter())
+	let sum = (fresh.into_iter())
 		.coalesce(|a, b| if b.start <= a.end { Ok(a.start..a.end.max(b.end)) } else { Err((a, b)) })
-		.collect_vec();
-	println!("{ranges:?}");
-	let sum = ranges.iter().fold(0, |sum, r| sum + r.end - r.start);
+		.fold(0, |sum, r| sum + r.end - r.start);
 	println!("{sum}")
 }
