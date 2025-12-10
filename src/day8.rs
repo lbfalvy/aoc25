@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::ops::Range;
 
@@ -58,10 +59,14 @@ impl Octree {
 		let center = AXES.map(|i| (bounds.start[i] + bounds.end[i]) / 2);
 		Self { center, bounds, kind: OctreeKind::Empty }
 	}
-	fn find_nearest(&self, pt: Vec3, cur: &mut Option<Vec3>) {
+	/// The point itself may also be found. If it is included in the octree, you
+	/// should exclude it in the filter.
+	///
+	/// Points are not passed to the filter in any particular order.
+	fn find_nearest(&self, pt: Vec3, cur: &mut Option<Vec3>, filter: &mut impl FnMut(Vec3) -> bool) {
 		match (&self.kind, *cur) {
 			(OctreeKind::Empty, _) => (),
-			(OctreeKind::Leaf(l), Some(old)) if sqdist(pt, old) < sqdist(pt, *l) => (),
+			(OctreeKind::Leaf(l), Some(old)) if sqdist(pt, old) < sqdist(pt, *l) || filter(*l) => (),
 			(OctreeKind::Leaf(l), _) => *cur = Some(*l),
 			(OctreeKind::Node(..), Some(old))
 				if sqdist(pt, old) < sqdist(nearest_in_cube(&self.bounds, pt), pt) =>
@@ -72,7 +77,7 @@ impl Octree {
 				for _ in 0..2 {
 					for _ in 0..2 {
 						for _ in 0..2 {
-							octs[iv[0]][iv[1]][iv[2]].find_nearest(pt, cur);
+							octs[iv[0]][iv[1]][iv[2]].find_nearest(pt, cur, filter);
 							mem::swap(&mut iv[axes_perm[0]], &mut iv_opp[axes_perm[0]]);
 						}
 						mem::swap(&mut iv[axes_perm[1]], &mut iv_opp[axes_perm[1]]);
@@ -82,8 +87,45 @@ impl Octree {
 			},
 		}
 	}
+	fn assert_in_bounds(&self, pt: Vec3) {
+		assert!(in_bounds(&self.bounds, pt), "Point {pt:?} outside octree at {:?}", self.bounds)
+	}
+	// remove a point if found
+	fn rm(&mut self, pt: Vec3) -> bool {
+		if !in_bounds(&self.bounds, pt) {
+			return false;
+		}
+		match &mut self.kind {
+			OctreeKind::Empty => false,
+			OctreeKind::Leaf(l) if *l != pt => false,
+			kind @ OctreeKind::Leaf(_) => {
+				*kind = OctreeKind::Empty;
+				true
+			},
+			OctreeKind::Node(nodes) => {
+				for node in nodes.iter_mut().flatten().flatten() {
+					if node.rm(pt) {
+						let new_kind =
+							nodes.iter().flatten().flatten().fold(Some(OctreeKind::Empty), |s, t| {
+								match (s, &t.kind) {
+									(n, OctreeKind::Empty) => n,
+									(Some(OctreeKind::Empty), OctreeKind::Leaf(l)) => Some(OctreeKind::Leaf(*l)),
+									(_, OctreeKind::Leaf(_)) => None,
+									(_, OctreeKind::Node(_)) => None,
+								}
+							});
+						if let Some(kind) = new_kind {
+							self.kind = kind
+						}
+						return true;
+					}
+				}
+				false
+			},
+		}
+	}
 	fn add(&mut self, pt: Vec3) {
-		assert!(in_bounds(&self.bounds, pt), "cannot add point outside octree");
+		self.assert_in_bounds(pt);
 		match &mut self.kind {
 			OctreeKind::Empty => self.kind = OctreeKind::Leaf(pt),
 			OctreeKind::Leaf(l) => {
@@ -105,7 +147,7 @@ impl Octree {
 				self.add(pt);
 			},
 			OctreeKind::Node(boxes) => {
-				let oct_pt = AXES.map(|i| if self.center[i] < pt[i] { 1 } else { 0 });
+				let oct_pt = AXES.map(|i| if self.center[i] <= pt[i] { 1 } else { 0 });
 				let sub = &mut boxes[oct_pt[0]][oct_pt[1]][oct_pt[2]];
 				sub.add(pt);
 			},
@@ -114,11 +156,30 @@ impl Octree {
 }
 
 pub fn task1() {
-	// let posv = load();
-
-	let mut t = Octree::new([0, 0, 0]..[100, 100, 100]);
-	t.add([10, 10, 10]);
-	t.add([20, 49, 20]);
-
-	println!("{t:?}")
+	let ptv = load();
+	let mut t = Octree::new([0, 0, 0]..[100_000, 100_000, 100_000]);
+	for pt in &ptv {
+		t.add(*pt);
+	}
+	let mut groups = HashMap::new();
+	let mut links = HashSet::new();
+	while !links.len() == 2000 {
+		let mut best_pair = None;
+		for pt in &ptv {
+			let mut nearest = None;
+			t.find_nearest(*pt, &mut nearest, &mut |p| p != *pt && !links.contains(&(*pt, p)));
+			let nearest = nearest.unwrap();
+			if best_pair.is_none_or(|(l, r)| sqdist(*pt, nearest) < sqdist(l, r)) {
+				best_pair = Some((*pt, nearest));
+			}
+		}
+		let best_pair = best_pair.unwrap();
+		links.extend([best_pair, (best_pair.1, best_pair.0)]);
+		groups.insert(best_pair.0, best_pair.1);
+		groups.insert(best_pair.1, best_pair.1);
+	}
+	println!("done");
+	// let mut near = None;
+	// t.find_nearest([30, 30, 30], &mut near);
+	// println!("{t:?}, {near:?}")
 }
